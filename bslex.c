@@ -150,7 +150,7 @@ static char peekchar(BSLexer* l)
 
 BSLexer* bslex_open(const char* filepath, const char* sourceName)
 {
-    FILE* f = bs_fopen(filepath,"r");
+    FILE* f = bs_fopen(filepath,"rb");
     if( f == NULL )
     {
         fprintf(stderr, "cannot open file for reading %s\n", filepath);

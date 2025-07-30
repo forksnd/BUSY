@@ -30,6 +30,7 @@
 #include <ctype.h>
 #include "lauxlib.h"
 #include <stdarg.h>
+#include <string.h>
 
 typedef enum BS_ParseArgs { BS_PathToSourceRoot = 1, BS_NewModule, BS_Params } BS_ParseArgs;
 
