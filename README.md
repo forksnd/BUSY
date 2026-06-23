@@ -1,4 +1,4 @@
-![icon](http://software.rochus-keller.ch/busy-logo-250x100.png)
+![icon](docs/logo_small.png)
 
 ## Welcome to the BUSY build system
 
@@ -135,7 +135,10 @@ With the `-G` option you can tell BUSY to generate code for another build system
 
 ### Specifying builds
 
-Builds are specified using BUSY files including code written in the BUSY specification language; see [The BUSY Build System - Language and Built-ins Specification](http://software.rochus-keller.ch/busy_spec.html) for detailed information about the specification language.
+Builds are specified using BUSY files including code written in the BUSY specification language; 
+see [The BUSY Build System - User's Guide](docs/The_BUSY_Build_System_Users_Guide.adoc) for how to use BUSY,
+and [The BUSY Build System - Language and Built-ins Specification](docs/The_BUSY_Build_System_Specification.adoc) 
+for detailed information about the specification language.
 
 A BUSY file is a file with the filename "BUSY", or alternatively "BUSY.busy"; if both files are present in a directory, the file named "BUSY" is given priority.
 
@@ -173,9 +176,7 @@ The current BUSY version is feature complete for the use with [LeanQt](https://g
 - [x] Language specification
 - [x] Make a lean Qt source tree version using BUSY (see [LeanQt](https://github.com/rochus-keller/LeanQt))
 - [x] QMake backend (tested with LeanQt on Linux, Windows and Mac with QtCreator 3 and 4)
-- [ ] Support cross-compilation (work in progress, see NOTE)
-- [ ] Tutorials
-- [ ] Make a Mono CLR source tree version using BUSY
+- [x] Tutorials
 - [ ] Implement Ninja backend
 - [ ] Implement CMake backend
 
