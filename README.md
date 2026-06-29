@@ -177,7 +177,7 @@ The current BUSY version is feature complete for the use with [LeanQt](https://g
 - [x] Make a lean Qt source tree version using BUSY (see [LeanQt](https://github.com/rochus-keller/LeanQt))
 - [x] QMake backend (tested with LeanQt on Linux, Windows and Mac with QtCreator 3 and 4)
 - [x] Tutorials
-- [ ] Implement Ninja backend
+- [x] Implement Ninja backend
 - [ ] Implement CMake backend
 
 NOTE:

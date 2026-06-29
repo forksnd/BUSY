@@ -4,7 +4,7 @@
 // License (GPL) versions 2.0 or 3.0 as published by the Free Software
 // Foundation, see http://www.gnu.org/copyleft/gpl.html for more information
 
-= image:logo_small.png[BUSY Logo] User's Guide
+= The BUSY Build System - User's Guide
 :toc:
 :numbered:
 
@@ -12,7 +12,7 @@
 
 === Version
 
-2026-06-24
+2026-06-30
 
 === Author
 
@@ -32,6 +32,7 @@ This guide explains how to add BUSY to a project and how to build projects using
 * *Minimal requirements*: only a C89 compiler needed to bootstrap
 * *Cross-platform*: supports Linux (x86, x86_64, ARM), Windows (MSVC, MinGW), and macOS (Clang)
 * *Direct builds*: can run builds directly without Make, NMake, or Ninja
+* *Ninja export*: generate `build.ninja` files for fast incremental rebuilds via `-G ninja`
 * *Modular*: explicit module hierarchy with information hiding and visibility control
 * *Parameterizable*: submodules can accept parameters, enabling flexible feature configuration
 * *Lean*: the entire build system compiles in seconds from source
@@ -857,7 +858,7 @@ lua build.lua [options] [<path-to-source>]
 |Check only: run the parser/analyzer without building; no files or directories are generated
 
 |`-G <generator>`
-|Generate project files for another build system; currently `-G qmake` is supported for QtCreator integration
+|Generate project files for another build system; `-G qmake` generates QtCreator project files, `-G ninja` generates Ninja build files
 |===
 
 === Examples
@@ -892,6 +893,162 @@ Generate QMake project files for use with QtCreator:
 ....
 lua build.lua .. -G qmake
 ....
+
+Generate Ninja build files and build with Ninja:
+
+....
+lua build.lua .. -G ninja
+cd output
+ninja -j8
+....
+
+[[ninja-backend]]
+== Using the Ninja Backend
+
+BUSY can build projects directly without any external build tool. For iterative development, however, incremental builds via Ninja can be faster, since Ninja uses fine-grained file-level dependency tracking (compiler depfiles) to recompile only what changed.
+
+The Ninja backend generates a `build.ninja` file in the output directory. You then use the `ninja` command to run the actual build.
+
+=== Generating Ninja Files
+
+To generate Ninja build files instead of building directly:
+
+....
+lua build.lua <path-to-source> -G ninja
+....
+
+This produces `output/build.ninja` (or the build directory specified with `-B`). All the usual options (`-T`, `-P`, `-M`, `-B`) work with `-G ninja`.
+
+=== Running the Build
+
+After generating, switch to the output directory and run Ninja:
+
+....
+cd output
+ninja
+....
+
+Ninja will compile, link, and run all necessary build steps. Use `-j <N>` to control parallelism, or `-v` for verbose output showing the exact commands:
+
+....
+ninja -j8        # build with 8 parallel jobs
+ninja -v         # verbose: show commands
+....
+
+=== Incremental Rebuilds
+
+Ninja tracks file dependencies via compiler-generated depfiles (GCC/Clang `-MMD` flags, MSVC `/showIncludes`). After the first build, modifying a source file and running `ninja` again recompiles only the affected object files and re-links only the affected targets:
+
+....
+ninja
+# ninja: no work to do.
+
+# Edit a source file, then:
+ninja
+# [1/2] CC output/mylib_changed_file.cpp.o
+# [2/2] LINK output/my_app
+....
+
+=== Example: Building LeanQt Hello
+
+This example builds the LeanQt hello example (a console application using Qt core classes) via the Ninja backend.
+
+Create a project directory with a BUSY file:
+
+....
+my_hello/
+    BUSY
+    build/
+        (BUSY source files)
+....
+
+The BUSY file:
+
+....
+submod qt = ../LeanQt
+
+let hello ! : Executable {
+    .sources += ../LeanQt/examples/hello.cpp
+    .deps += qt.libqtcore
+    .configs += qt.core_client_config
+}
+....
+
+Generate and build:
+
+....
+cd my_hello/build
+cc *.c -O2 -lm -o lua
+lua build.lua .. -G ninja
+cd output
+ninja
+....
+
+Ninja compiles the approximately 65 LeanQt core source files, archives them into `libqtcore.a`, compiles `hello.cpp`, and links the executable. The entire build produces about 69 build steps. On subsequent runs, `ninja` reports `no work to do` unless sources have changed.
+
+=== Supported Features
+
+The Ninja backend handles all BUSY product types and toolchains:
+
+|===
+|Product type |Ninja rule |Description
+
+|Compile (GCC/Clang)
+|`cc_gcc`
+|Compilation with depfile tracking (`-MMD -MF`)
+
+|Compile (MSVC)
+|`cc_msvc`
+|Compilation with `/showIncludes` dependency tracking
+
+|Link executable
+|`link_exe`
+|Links object files and libraries into an executable
+
+|Link shared library
+|`link_dll`
+|Links a `.so` / `.dylib` / `.dll` with correct platform flags
+
+|Static library
+|`ar`
+|Archives object files into `.a` / `.lib`
+
+|Moc
+|`moc`
+|Runs the Qt Meta Object Compiler with defines
+
+|Rcc
+|`rcc`
+|Runs the Qt Resource Compiler
+
+|Uic
+|`uic`
+|Runs the Qt UI Compiler
+
+|Copy
+|`cp`
+|Copies files to the output directory
+
+|Lua script
+|`run_lua`
+|Executes a Lua script as a build step
+|===
+
+All three toolchains (GCC, Clang, MSVC) and all supported platforms (Linux, macOS, Windows) are handled with correct flag syntax, library naming conventions (`lib` prefix on Unix, `.lib` / `.dll` on Windows), and shared library flags (`-shared`, `-dynamiclib`, `/dll`).
+
+=== When to Use Ninja vs. Direct Build
+
+Use the *direct build* (`lua build.lua ..`) when:
+
+* You want the simplest possible workflow with no additional tools
+* You are doing a clean build from scratch (both approaches are similar in speed)
+* You are on a system where Ninja is not available
+
+Use the *Ninja backend* (`-G ninja` + `ninja`) when:
+
+* You are doing frequent incremental rebuilds during development
+* You want to leverage Ninja's parallel scheduling and minimal-rebuild logic
+* You want to use tools that consume `build.ninja` or `compile_commands.json` (via `ninja -t compdb`)
 
 == Predeclared Variables Quick Reference
 
@@ -976,7 +1133,7 @@ These variables are set by BUSY and available in all BUSY files:
 
 === Visibility and Information Hiding
 
-* Make only the declarations that consumers need *public* (`\*`) or *default* (`!`)
+* Make only the declarations that consumers need *public* (`*`) or *default* (`!`)
 * Use *protected* (`-`) for declarations that should be accessible to submodules but not to the outside
 * Keep internal implementation details private (no visibility mark)
 * Configs shared between a library and its consumers should be public
