@@ -1,0 +1,378 @@
+// LeanDoc 2026-06-09
+
+// This file may be used under the terms of the GNU General Public
+// License (GPL) versions 2.0 or 3.0 as published by the Free Software
+// Foundation, see http://www.gnu.org/copyleft/gpl.html for more information
+
+image:logo_small.png[BUSY Logo]
+
+= A Statically Typed, Zero-Dependency Build System for C/C++
+
+Rochus Keller <me@rochus-keller.ch>
+2026-06-30
+
+:toc:
+:numbered:
+
+== Executive Summary
+
+Build systems are supposed to be invisible infrastructure. In practice, they are a recurring source of friction: complex bootstrapping requirements that block onboarding and cross-compilation, dynamically typed specifications that hide errors until build time, and flat directory models that make large multi-module projects hard to reason about.
+
+BUSY addresses all three problems. It bootstraps from a C89 compiler alone, no CMake, no Python, compiling from source in under six seconds to a single 500 KB binary. Its static type system rejects specification errors before a single source file is compiled. Its module system enforces explicit dependencies with parameterized instantiation and enforced information hiding.
+
+The claims here are not theoretical. BUSY has been used to build several production projects totalling 1.8 million lines of C/C++ code, including e.g. a complete Qt framework port (LeanQt, 1M SLOC), a full-featured IDE (LeanCreator, 554K SLOC), a compiler infrastructure (Eigen, 167K SLOC), and a language toolchain (Oberon+, 71K SLOC), across Linux, Windows, and macOS, using GCC, Clang, and MSVC. The entire build specification for all four projects is 7,009 lines: one line of BUSY for every 256 lines of source code.
+
+The core thesis: *a build system should be as easy to set up and as reliable as the compiler itself*.
+
+== Practical Evidence
+
+=== Four projects, 1.8 million lines
+
+BUSY has been used to build substantial, real-world projects (line counts measured by `cloc`, i.e. code only, excluding blanks and comments):
+
+|===
+|Project |Domain |SLOC |BUSY files |BUSY lines |Spec-to-source ratio
+
+|LeanQt
+|Qt framework (core, gui, widgets, network)
+|1,004,262
+|30
+|3,311
+|1 : 303
+
+|LeanCreator
+|IDE (editor, debugger, project management)
+|553,507
+|19
+|2,185
+|1 : 253
+
+|Eigen
+|Compiler infrastructure
+|167,345
+|7
+|1,296
+|1 : 129
+
+|Oberon+
+|Language toolchain
+|71,015
+|2
+|217
+|1 : 327
+
+|*Total*
+|
+|*1,796,129*
+|*58*
+|*7,009*
+|*1 : 256*
+|===
+
+On average, one line of BUSY specification controls 256 lines of source code, a measure of the language's conciseness.
+
+=== LeanQt: a Qt framework without qmake or CMake
+
+LeanQt is a stripped-down build of the Qt 5 framework. The upstream Qt project uses a combination of `qmake` `.pro` files and CMake (for Qt 6), totalling thousands of build specification lines distributed across hundreds of files.
+
+LeanQt replaces _all_ of this with 30 BUSY files totalling 3,311 lines. These 3,311 lines build a fully functional Qt framework with configurable modules (core, gui, widgets, network, concurrent, image), third-party libraries (zlib, pcre, freetype, harfbuzz, libjpeg, libpng, xcb, xkbcommon), and Qt tools (moc, rcc, uic).
+
+The build is parameterized via 36 feature flags. A minimal core-only build pulls in only the source files needed for `QByteArray`, `QString`, `QDateTime`, and the other core classes. A full GUI build includes the platform backends (XCB on Linux, Cocoa on macOS, Win32 on Windows), the widget toolkit, and the item view framework.
+
+This kind of fine-grained configurability, where features are statically resolved at analysis time and produce a tailored set of compilation commands, is precisely what BUSY was designed for.
+
+=== LeanCreator: an IDE with 19 submodules
+
+LeanCreator is a full IDE derived from Qt Creator. It consists of 19 BUSY submodules covering the text editor, project manager, debugger integration, and more. The BUSY specification for the entire IDE is 2,185 lines.
+
+The inter-module dependencies are explicit: each plugin submodule declares its dependencies on core libraries and other plugins. The visibility system ensures that internal implementation details do not leak across module boundaries.
+
+=== Cross-platform, cross-toolchain
+
+All mentioned projects build on Linux (GCC, Clang), Windows (MSVC, MinGW), and macOS (Clang). BUSY handles platform differences through conditional statements in the build specification:
+
+....
+if target_os == `linux {
+    .sources += ./qcore_unix.cpp
+    .lib_names += [ "pthread" "rt" "dl" ]
+}
+if target_os == `win32 {
+    .sources += ./qcore_win.cpp
+    .lib_names += [ "ws2_32" "advapi32" ]
+}
+....
+
+The predeclared `target_os`, `target_toolchain`, and related variables allow platform-specific adjustments without external scripts or generator expressions. Toolchain-specific flags (e.g. `/MT` for MSVC, `-fPIC` for shared libraries) are handled the same way.
+
+== The Bootstrap Problem
+
+=== What it means
+
+Every build system has a bootstrap problem: you need _something_ already installed to use it. The severity of this problem varies enormously.
+
+To build a project with *CMake*, you need: CMake itself (a large C++ application), plus a build backend (Make, Ninja, or Visual Studio), plus a compiler. On a fresh Linux system, that means `apt install cmake ninja-build gcc`, three separate tools, each with its own versioning headaches. On Windows, the situation is worse: CMake must be downloaded separately, and the interaction between CMake generators and Visual Studio versions is a frequent source of confusion.
+
+To build a project with *Meson*, you need: Python 3, Meson (installed via pip or system package), Ninja (Meson does not work without it), plus a compiler. That is four dependencies before you can compile a single source file.
+
+To build a project with *BUSY*, you need: a C89 compiler. Nothing else.
+
+=== Why it matters
+
+*Embedded and cross-compilation environments.* Many embedded development setups have a cross-compiler and not much else. Installing CMake or Meson on the build host may require package management, network access, or administrative privileges that are not available. BUSY compiles from source with `cc *.c -O2 -lm -o lua` in under six seconds and produces a single 500 KB binary. There is nothing to install, configure, or update.
+
+*Reproducibility.* A project that depends only on a C compiler for its build system has fewer moving parts. There is no `cmake --version` mismatch, no `pip install meson` version conflict, no Ninja version incompatibility. The BUSY source code ships with the project (typically in a `build/` subdirectory), so the exact build system version is committed alongside the source code and never drifts unless the developer explicitly updates it.
+
+*Onboarding.* A new contributor to a BUSY-based project clones the repo and runs two commands: `cc *.c -O2 -lm -o lua && lua build.lua ..`. No "install CMake 3.21 or later", no "make sure you have Ninja", no "create a build directory and run cmake -G". The entire build system compiles from scratch in seconds.
+
+=== The numbers
+
+|===
+|Build system |Dependencies to bootstrap |Typical binary/install size |Bootstrap time from source
+
+|BUSY
+|C89 compiler
+|~500 KB (single binary)
+|~6 seconds
+
+|CMake
+|C++ compiler, Make or Ninja
+|~50 MB installed
+|30+ minutes from source
+
+|Meson
+|Python 3, pip, Ninja
+|~20 MB (Python + Meson + Ninja)
+|N/A (interpreted)
+
+|Bazel
+|JDK, network access
+|~200 MB installed
+|N/A (binary distribution)
+|===
+
+== Static Typing
+
+=== The problem with dynamically typed builds
+
+CMake and Meson specifications are essentially dynamically typed scripts, in CMake, everything is an untyped string. There is no distinction between a file path, a compiler flag, a library name, and a boolean. Errors are discovered at build time, or worse, silently produce wrong results.
+
+Consider a common CMake mistake:
+
+....
+# CMake: typo in property name -- silently ignored
+set_target_properties(mylib PROPERTIES PUBLC_HEADER "mylib.h")
+....
+
+CMake does not report an error. The property name `PUBLC_HEADER` (missing the "I") is simply treated as a custom property with no effect. The developer discovers the problem only when the headers are not installed correctly, possibly much later.
+
+In Meson, the situation is somewhat better (Meson has a type system), but it is still possible to pass wrong types to functions without immediate error:
+
+....
+# Meson: wrong type for sources -- discovered at build time
+executable('myapp', sources: true)
+....
+
+=== BUSY's approach
+
+BUSY has a full static type system with predeclared classes, typed fields, and type-checked assignments. The analyzer runs _before_ any compilation happens and rejects specifications that violate the type rules.
+
+....
+# BUSY: typo in field name -- immediate error at analysis time
+let hello ! : Executable {
+    .sorces += ./main.c
+}
+# ERROR: "Class 'Executable' has no field 'sorces'"
+....
+
+....
+# BUSY: wrong type -- immediate error at analysis time
+let hello ! : Executable {
+    .sources += true
+}
+# ERROR: "left and right side are not assignment compatible"
+....
+
+In large projects with hundreds of build declarations, catching errors at analysis time saves significant debugging effort. The error messages include file names and line numbers and point directly to the problematic declaration.
+
+=== Typed configurations
+
+BUSY's type system extends to build configurations. A `Config` is a first-class typed object with well-defined fields (`cflags`, `defines`, `include_dirs`, `lib_names`, etc.). Configurations compose explicitly via the `.configs` field, and the type checker ensures that you cannot accidentally assign a compiler flag list to a library name list.
+
+In CMake, the equivalent is a mix of `target_compile_definitions()`, `target_include_directories()`, `target_link_libraries()`, and generator expressions, spread across multiple commands with no structural relationship between them. Getting the `PUBLIC` vs. `PRIVATE` vs. `INTERFACE` distinction wrong is one of the most common CMake errors, and CMake does not flag the mistake.
+
+== The Module System
+
+=== Explicit hierarchy
+
+BUSY has a proper module system with explicit submodule declarations, visibility marks, and information hiding. Every dependency between modules is declared in the BUSY file and checked by the analyzer.
+
+....
+submod qt = ../LeanQt (HAVE_GUI, HAVE_WIDGETS)
+
+let my_app ! : Executable {
+    .sources += ./main.cpp
+    .deps += qt.libqtcore
+    .configs += qt.core_client_config
+}
+....
+
+In this example:
+
+* `submod qt = ../LeanQt` declares a named submodule with an explicit path
+* `(HAVE_GUI, HAVE_WIDGETS)` passes parameters to the submodule
+* `qt.libqtcore` refers to a specific product in the submodule
+* `qt.core_client_config` refers to an exported configuration
+
+The visibility marks (`*` for public, `-` for private, `!` for default build targets) control what a submodule exports. A product marked `-` is invisible outside its module. A product with no mark is visible within the parent module only. This is genuine information hiding, not a convention, but an enforced language rule.
+
+=== CMake's lack of a module system
+
+CMake has `add_subdirectory()`, but it does not constitute a module system:
+
+* There is no visibility control. Any target defined anywhere is globally visible.
+* There is no parameterization. You cannot instantiate the same subdirectory twice with different options (without resorting to workarounds like `ExternalProject_Add`).
+* There is no scoping. Variables set in one `CMakeLists.txt` leak into the parent scope via `set(... PARENT_SCOPE)` or are cached globally.
+* Target name collisions are a global problem. If two libraries both define a target named `utils`, the build fails.
+
+Meson has a cleaner subdirectory model, but it still lacks parameterized instantiation, you cannot import the same Meson subproject twice with different feature flags.
+
+=== Parameterized submodules
+
+BUSY's parameterized submodule instantiation is genuinely novel among C/C++ build systems. Consider LeanQt, which exposes 36 feature parameters:
+
+....
+# In the consumer project's BUSY file:
+submod qt = ../LeanQt (HAVE_GUI, HAVE_WIDGETS, HAVE_THREADS)
+....
+
+The consumer selects precisely which features it needs. LeanQt's BUSY files use these parameters to conditionally include source files, set preprocessor defines, and control which libraries are built. This is not a runtime configuration, it is resolved at analysis time and produces a tailored, minimal build.
+
+No equivalent mechanism exists in CMake. The typical CMake approach uses `option()` variables or `find_package()` components, but these are global state, not scoped to a subdirectory instance.
+
+== Direct Build Capability
+
+=== No external build driver required
+
+When you run `lua build.lua ..`, BUSY can build the project directly. It invokes the compiler and linker itself, manages parallelism, and tracks dependencies. There is no intermediate step of generating Makefiles or Ninja files.
+
+This eliminates an entire class of problems:
+
+* No "generator" mismatch (CMake's `-G` flag selects among Make, Ninja, Visual Studio, Xcode, etc., each with different behaviour)
+* No `Makefile` debugging (intermediate build files never exist)
+* No `ninja: error: build.ninja:1234: multiple rules generate foo.o` (a common CMake/Ninja interaction bug)
+
+For developers who want the performance benefits of an incremental build system, BUSY also supports generating Ninja build files via `-G ninja`. This gives the best of both worlds: BUSY's clean specification language for the build description, with Ninja's fast incremental rebuilds for iterative development.
+
+=== The two-command workflow
+
+The entire workflow for building a BUSY project from scratch is:
+
+....
+cc *.c -O2 -lm -o lua    # compile BUSY itself (once)
+lua build.lua ..          # build the project
+....
+
+Compare with CMake:
+
+....
+mkdir build && cd build
+cmake -G Ninja ..         # or cmake -G "Unix Makefiles" ..
+ninja                     # or make -j$(nproc)
+....
+
+Or Meson:
+
+....
+meson setup build
+cd build
+ninja
+....
+
+The difference is not just fewer commands. The BUSY workflow has no decision points: there is no generator to choose, no build directory layout to decide, no `cmake --build build --config Release` vs. `cmake --build build --config Debug` confusion.
+
+== Comparison with Specific Build Systems
+
+=== CMake
+
+CMake is the de facto standard for open-source C/C++ projects. It has an enormous ecosystem and widespread IDE support, genuine strengths that BUSY does not yet match.
+
+However, CMake has deep structural problems:
+
+*The language is cumbersome.* CMake's scripting language has accumulated decades of ad-hoc features. Variable scoping is confusing (`set(FOO "bar" PARENT_SCOPE)`), string handling is error-prone (semicolons in strings silently become list separators), and the distinction between "old-style" and "modern" CMake creates a permanent source of confusion. The official documentation regularly warns against patterns that were considered best practice five years ago.
+
+*No type safety.* Everything is a string. A typo in a property name, a wrong variable reference, or a type mismatch is silently accepted. In large projects with many `CMakeLists.txt` files, this leads to subtle, hard-to-diagnose build failures.
+
+*Two-stage build model.* CMake generates build files (for Make, Ninja, or an IDE), and then a separate tool runs the actual build. CMake bugs and Ninja/Make bugs therefore interact in surprising ways. The `cmake --build` abstraction helps, but does not eliminate the problem.
+
+*No proper modules.* `add_subdirectory()` is a directory inclusion mechanism, not a module system. There is no visibility control, no parameterized instantiation, no scoping.
+
+*Version fragmentation.* CMake evolves by adding `cmake_minimum_required()` version gates. Every project picks a different minimum version, the available features depend on what the original author chose, and upgrading the minimum version can break downstream consumers. BUSY has a `busy_version` check, but the language itself is stable, there are no "modern BUSY" vs. "old BUSY" style wars.
+
+=== Meson
+
+Meson is a well-designed build system that shares some goals with BUSY: it aims for simplicity, has a cleaner language than CMake, and always uses Ninja as the backend. Meson is a significant improvement over CMake in several respects.
+
+Where BUSY differs:
+
+*Bootstrap dependency.* Meson requires Python 3 and Ninja. This is not onerous on desktop Linux, but it is a real barrier on embedded systems, Windows developer setups without Python, or locked-down corporate environments. BUSY requires only a C compiler.
+
+*No direct build.* Meson always generates Ninja files. You cannot build without Ninja. BUSY can build directly or generate Ninja files at your choice.
+
+*Weaker module system.* Meson's `subproject()` mechanism supports wraps (download and build dependencies), but does not support parameterized instantiation. You cannot import the same subproject twice with different options. BUSY's `submod` with parameter passing is strictly more powerful.
+
+*Dynamic analysis.* Meson evaluates its build files top-to-bottom as a script. While it has better type checking than CMake, errors in conditional branches are only discovered when those branches are taken. BUSY's static analysis checks the entire specification regardless of which branches are active.
+
+=== Make / GNU Make
+
+Make is the oldest and most portable build tool. Its strength is universality: virtually every Unix system has Make installed.
+
+Make's weakness is that it is not a build _system_, it is a command execution engine with dependency tracking. Writing correct, portable Makefiles for a multi-platform C/C++ project requires hundreds of lines of shell scripting, platform detection, and manual dependency management. There is no type checking, no module system, and no configuration language.
+
+BUSY replaces the entire Make + Autoconf + Automake stack with a single tool that fits in 500 KB.
+
+=== Bazel / Buck / Please
+
+Google's Bazel and Facebook's Buck represent the "hermetic build" philosophy: every input to every build action is explicitly declared, builds are reproducible by design, and remote caching and execution are first-class features.
+
+These are excellent properties for large-scale monorepos with thousands of engineers. They are overkill for the vast majority of C/C++ projects. Bazel requires a JDK to run, has a complex configuration language (Starlark), and its C/C++ support is not its primary focus. The learning curve and infrastructure requirements are substantial.
+
+BUSY targets a different niche: projects that want a clean, correct, and portable build specification without the overhead of a distributed build infrastructure. If you need remote caching and execution for a 100-million-line monorepo, use Bazel. If you need to build a 2-million-line C/C++ project on a machine that has nothing but a C compiler, use BUSY.
+
+== The Backend Generators
+
+BUSY's direct build capability is its primary mode of operation, but it also supports generating project files for other build systems and IDEs. This gives you the clean BUSY specification as the single source of truth, with the ability to export to the tools your team already uses.
+
+=== QMake Generator (`-G qmake`)
+
+The QMake generator produces `.pro` and `.pri` files compatible with QtCreator. This allows developers to use QtCreator's code navigation, debugging, and project management features while keeping BUSY as the authoritative build specification.
+
+=== Ninja Generator (`-G ninja`)
+
+The Ninja generator produces a `build.ninja` file that can be built with the Ninja build tool. This is useful for iterative development where Ninja's fast incremental rebuilds are valuable:
+
+....
+lua build.lua .. -G ninja
+cd output
+ninja -j8
+....
+
+Ninja's dependency tracking (via depfiles for GCC/Clang, `/showIncludes` for MSVC) ensures that only changed files are recompiled. The generated `build.ninja` file includes proper build rules for all product types: compilation (with per-toolchain flag syntax), static and dynamic library archiving, executable linking, Qt tool invocation (moc, rcc, uic), Lua script execution, and file copying.
+
+The Ninja generator handles all three toolchains (GCC, Clang, MSVC) and all supported platforms (Linux, Windows, macOS) with correct flag syntax, library naming conventions, and shared library flags.
+
+== Conclusion
+
+BUSY is not the right tool for every project. If you need deep IDE integration with Visual Studio or Xcode project files, CMake's generator ecosystem is unmatched. If you need hermetic builds with remote caching for a massive monorepo, Bazel is the right choice. If you need to integrate with a large ecosystem of CMake-based dependencies via `find_package()`, CMake is the pragmatic option.
+
+But for C/C++ projects that value:
+
+* *Zero-dependency bootstrapping*, build on any machine with a C compiler
+* *Correctness*, catch build specification errors before compilation starts
+* *Clarity*, a statically typed, concise language instead of dynamically typed scripts
+* *Modularity*, explicit module hierarchy with information hiding and parameterization
+* *Simplicity*, two commands from source checkout to running binary
+* *Portability*, one specification, three toolchains, three platforms, no generator selection
+
+...BUSY is demonstrably superior. The evidence is in the projects: 1.8 million lines of production code, built correctly and portably with 7,009 lines of BUSY specification. That is what a build system should look like.
+
+BUSY is open-source, and its reference projects are available on GitHub. There is no easier way to see for yourself.

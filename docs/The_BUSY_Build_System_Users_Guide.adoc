@@ -4,7 +4,7 @@
 // License (GPL) versions 2.0 or 3.0 as published by the Free Software
 // Foundation, see http://www.gnu.org/copyleft/gpl.html for more information
 
-= The BUSY Build System - User's Guide
+= image:logo_small.png[BUSY Logo] User's Guide
 :toc:
 :numbered:
 
@@ -1133,7 +1133,7 @@ These variables are set by BUSY and available in all BUSY files:
 
 === Visibility and Information Hiding
 
-* Make only the declarations that consumers need *public* (`*`) or *default* (`!`)
+* Make only the declarations that consumers need *public* (`\*`) or *default* (`!`)
 * Use *protected* (`-`) for declarations that should be accessible to submodules but not to the outside
 * Keep internal implementation details private (no visibility mark)
 * Configs shared between a library and its consumers should be public
