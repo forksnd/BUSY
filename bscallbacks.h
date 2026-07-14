@@ -45,6 +45,7 @@ typedef enum BSBuildParam { BS_infile, BS_outfile,
                             BS_cflag, BS_define, BS_include_dir,
                             BS_ldflag, BS_lib_dir, BS_lib_name, BS_lib_file, BS_framework,
                             BS_defFile, BS_name, BS_arg,
+                            BS_moc_arg, /* extra moc argument token (e.g. -p, a dir, -b, a header) */
                           } BSBuildParam;
 
 // toolchain : BSToolchain

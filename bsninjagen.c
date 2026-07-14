@@ -79,6 +79,66 @@ static const char* db_str(DynBuf* b)
     return b->data;
 }
 
+/* set of already-emitted build outputs, used to deduplicate build statements. A product such as a Copy
+   can be reached through several dependency paths (e.g. both the executable and a Rcc product depend on
+   the copied tool), and unlike Library/SourceSet/Moc it is not marked built in the visitor, so its build
+   operation is replayed once per path. ninja rejects two rules generating the same output, so we skip a
+   build statement whose output was already written. */
+
+typedef struct StrSet {
+    char** items;
+    size_t len;
+    size_t alloc;
+} StrSet;
+
+static void strset_init(StrSet* s)
+{
+    s->items = 0;
+    s->len = 0;
+    s->alloc = 0;
+}
+
+static void strset_free(StrSet* s)
+{
+    size_t i;
+    for( i = 0; i < s->len; i++ )
+        free(s->items[i]);
+    free(s->items);
+    s->items = 0;
+    s->len = 0;
+    s->alloc = 0;
+}
+
+static int strset_contains(StrSet* s, const char* str)
+{
+    size_t i;
+    for( i = 0; i < s->len; i++ )
+    {
+        if( strcmp(s->items[i],str) == 0 )
+            return 1;
+    }
+    return 0;
+}
+
+static int strset_seen(StrSet* s, const char* str)
+{
+    /* returns 1 if str was already present, otherwise adds it and returns 0 */
+    size_t i;
+    for( i = 0; i < s->len; i++ )
+    {
+        if( strcmp(s->items[i],str) == 0 )
+            return 1;
+    }
+    if( s->len + 1 > s->alloc )
+    {
+        s->alloc = s->alloc == 0 ? 64 : s->alloc * 2;
+        s->items = (char**)realloc(s->items, s->alloc * sizeof(char*));
+    }
+    s->items[s->len] = (char*)malloc(strlen(str)+1);
+    strcpy(s->items[s->len], str);
+    s->len++;
+    return 0;
+}
 
 static void db_append_escaped(DynBuf* b, const char* s)
 {
@@ -132,6 +192,8 @@ typedef struct NinjaCtx {
     DynBuf deffile;    /* /DEF: file for msvc */
     DynBuf args;       /* script arguments */
     DynBuf name;       /* rcc resource name */
+    DynBuf mocargs;    /* extra moc arguments (e.g. -p/-b private header) */
+    StrSet emitted;    /* build outputs already written, for deduplication */
 } NinjaCtx;
 
 static void ctx_init(NinjaCtx* ctx)
@@ -154,6 +216,8 @@ static void ctx_init(NinjaCtx* ctx)
     db_init(&ctx->deffile);
     db_init(&ctx->args);
     db_init(&ctx->name);
+    db_init(&ctx->mocargs);
+    strset_init(&ctx->emitted);
 }
 
 static void ctx_free(NinjaCtx* ctx)
@@ -172,6 +236,8 @@ static void ctx_free(NinjaCtx* ctx)
     db_free(&ctx->deffile);
     db_free(&ctx->args);
     db_free(&ctx->name);
+    db_free(&ctx->mocargs);
+    strset_free(&ctx->emitted);
 }
 
 static void ctx_clear(NinjaCtx* ctx)
@@ -190,6 +256,7 @@ static void ctx_clear(NinjaCtx* ctx)
     db_clear(&ctx->deffile);
     db_clear(&ctx->args);
     db_clear(&ctx->name);
+    db_clear(&ctx->mocargs);
 }
 
 
@@ -309,6 +376,11 @@ static void ninja_param(BSBuildParam p, const char* value, void* data)
         db_append(&ctx->args, value);
         db_append(&ctx->args, "\"");
         break;
+    case BS_moc_arg:
+        db_append(&ctx->mocargs, " \"");
+        db_append(&ctx->mocargs, value);
+        db_append(&ctx->mocargs, "\"");
+        break;
     }
 }
 
@@ -388,37 +460,72 @@ static void write_link_lib(NinjaCtx* ctx)
     fprintf(out, "  arcmd = %s\n", db_str(&ctx->command));
 }
 
+/* When a Qt tool is built by this project (e.g. LeanQt builds and copies its own moc/rcc),
+   its executable is produced by a cp build statement emitted earlier as a dependency. The tool-running
+   build statement must wait for that copy, so we add the tool as an order-only dependency */
+
+static void append_tool_orderdep(NinjaCtx* ctx, DynBuf* dep)
+{
+    DynBuf esc;
+    db_init(&esc);
+    db_append_escaped(&esc, db_str(&ctx->command));
+    db_clear(dep);
+    if( *db_str(&esc) && strset_contains(&ctx->emitted, db_str(&esc)) )
+    {
+        db_append(dep, " || ");
+        db_append(dep, db_str(&esc));
+    }
+    db_free(&esc);
+}
+
 static void write_moc(NinjaCtx* ctx)
 {
     FILE* out = ctx->out;
+    DynBuf dep;
+    db_init(&dep);
+    append_tool_orderdep(ctx,&dep);
 
-    fprintf(out, "build %s: moc %s\n",
+    fprintf(out, "build %s: moc %s%s\n",
             db_str(&ctx->outfile),
-            db_str(&ctx->infiles));
+            db_str(&ctx->infiles),
+            db_str(&dep));
     fprintf(out, "  moccmd = %s\n", db_str(&ctx->command));
     if( ctx->defines.len > 0 )
         fprintf(out, "  mocdefs =%s\n", db_str(&ctx->defines));
+    if( ctx->mocargs.len > 0 )
+        fprintf(out, "  mocargs =%s\n", db_str(&ctx->mocargs));
+    db_free(&dep);
 }
 
 static void write_rcc(NinjaCtx* ctx)
 {
     FILE* out = ctx->out;
+    DynBuf dep;
+    db_init(&dep);
+    append_tool_orderdep(ctx,&dep);
 
-    fprintf(out, "build %s: rcc %s\n",
+    fprintf(out, "build %s: rcc %s%s\n",
             db_str(&ctx->outfile),
-            db_str(&ctx->infiles));
+            db_str(&ctx->infiles),
+            db_str(&dep));
     fprintf(out, "  rcccmd = %s\n", db_str(&ctx->command));
     fprintf(out, "  rccname = %s\n", db_str(&ctx->name));
+    db_free(&dep);
 }
 
 static void write_uic(NinjaCtx* ctx)
 {
     FILE* out = ctx->out;
+    DynBuf dep;
+    db_init(&dep);
+    append_tool_orderdep(ctx,&dep);
 
-    fprintf(out, "build %s: uic %s\n",
+    fprintf(out, "build %s: uic %s%s\n",
             db_str(&ctx->outfile),
-            db_str(&ctx->infiles));
+            db_str(&ctx->infiles),
+            db_str(&dep));
     fprintf(out, "  uiccmd = %s\n", db_str(&ctx->command));
+    db_free(&dep);
 }
 
 static void write_copy(NinjaCtx* ctx)
@@ -453,6 +560,12 @@ static void write_lua(NinjaCtx* ctx)
 static void ninja_end(void* data)
 {
     NinjaCtx* ctx = (NinjaCtx*)data;
+
+    /* deduplicate: skip a build statement whose output was already emitted.
+       the build target is the outfile, except for a stampless lua script which targets its infile. */
+    const char* key = ctx->outfile.len > 0 ? db_str(&ctx->outfile) : db_str(&ctx->infiles);
+    if( *key && strset_seen(&ctx->emitted, key) )
+        return;
 
     switch(ctx->op)
     {
@@ -554,7 +667,7 @@ static void write_rules(FILE* out, int toolchain, int os)
 
     /* moc */
     fprintf(out, "rule moc\n");
-    fprintf(out, "  command = $moccmd $mocdefs \"$in\" -o \"$out\"\n");
+    fprintf(out, "  command = $moccmd $mocdefs \"$in\" -o \"$out\" $mocargs\n");
     fprintf(out, "  description = MOC $out\n\n");
 
     /* rcc */
