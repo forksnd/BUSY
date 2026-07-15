@@ -24,6 +24,7 @@
 #include "bsrunner.h"
 #include "bsqmakegen.h"
 #include "bsninjagen.h"
+#include "bscmakegen.h"
 #include "bshost.h"
 #include "bsunicode.h"
 #include "bsvisitor.h"
@@ -634,6 +635,12 @@ static int bs_generate (lua_State *L)
     }else if( strcmp(lua_tostring(L,WHAT),"ninja") == 0 )
     {
         lua_pushcfunction(L, bs_genNinja);
+        lua_pushvalue(L,ROOT);
+        lua_pushvalue(L,PRODS);
+        lua_call(L,2,0);
+    }else if( strcmp(lua_tostring(L,WHAT),"cmake") == 0 )
+    {
+        lua_pushcfunction(L, bs_genCmake);
         lua_pushvalue(L,ROOT);
         lua_pushvalue(L,PRODS);
         lua_call(L,2,0);

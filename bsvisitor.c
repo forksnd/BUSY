@@ -1225,6 +1225,30 @@ static void runmoc(lua_State* L,BSVisitorCtx* ctx, int cls, int builtins)
                 ctx->d_param(BS_define, lua_tostring(L,-1), ctx->d_data);
                 lua_pop(L,1); // define
             }
+
+            // if there is a sibling {{source_dir}}/{{source_name_part}}_p.h, pass it to moc via -p/-b
+            // so the generated file includes it (same behaviour as the direct build in bsrunner.c)
+            if( lang == BS_header )
+            {
+                lua_pushstring(L,"{{source_dir}}/{{source_name_part}}_p.h");
+                bs_apply_source_expansion(lua_tostring(L,source),lua_tostring(L,-1), 0);
+                const int hasPrivateHeader = bs_exists2(bs_global_buffer());
+                lua_pop(L,1);
+                if( hasPrivateHeader )
+                {
+                    ctx->d_param(BS_moc_arg, "-p", ctx->d_data);
+                    lua_pushstring(L,"{{source_dir}}");
+                    bs_apply_source_expansion(lua_tostring(L,source),lua_tostring(L,-1), 0);
+                    // {{source_dir}} is already denormalized by bs_path_part (BS_filePath)
+                    ctx->d_param(BS_moc_arg, bs_global_buffer(), ctx->d_data);
+                    lua_pop(L,1);
+                    ctx->d_param(BS_moc_arg, "-b", ctx->d_data);
+                    lua_pushstring(L,"{{source_name_part}}_p.h");
+                    bs_apply_source_expansion(lua_tostring(L,source),lua_tostring(L,-1), 0);
+                    ctx->d_param(BS_moc_arg, bs_global_buffer(), ctx->d_data);
+                    lua_pop(L,1);
+                }
+            }
         }
 
         if( ctx->d_end )

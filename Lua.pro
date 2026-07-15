@@ -27,7 +27,6 @@ TEMPLATE = app
 QMAKE_CFLAGS += -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-but-set-parameter
 
 HEADERS += \
-    bsninjagen.h \
     lapi.h \
     lauxlib.h \
     lcode.h \
@@ -59,11 +58,12 @@ HEADERS += \
     bshost.h \
     bsdetect.h \
     bsqmakegen.h \
+    bsninjagen.h \
+    bscmakegen.h \
     bsvisitor.h \
     bscallbacks.h
 
 SOURCES += \
-    bsninjagen.c \
     lapi.c \
     lauxlib.c \
     lbaselib.c \
@@ -102,6 +102,8 @@ SOURCES += \
     bsrunner.c \
     bshost.c \
     bsqmakegen.c \
+    bsninjagen.c \
+    bscmakegen.c \
     bsvisitor.c
 
 
