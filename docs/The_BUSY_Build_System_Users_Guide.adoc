@@ -12,7 +12,7 @@
 
 === Version
 
-2026-06-30
+2026-07-16
 
 === Author
 
@@ -33,6 +33,7 @@ This guide explains how to add BUSY to a project and how to build projects using
 * *Cross-platform*: supports Linux (x86, x86_64, ARM), Windows (MSVC, MinGW), and macOS (Clang)
 * *Direct builds*: can run builds directly without Make, NMake, or Ninja
 * *Ninja export*: generate `build.ninja` files for fast incremental rebuilds via `-G ninja`
+* *CMake export*: generate a self-contained `CMakeLists.txt` via `-G cmake`, so the project can be built, opened in an IDE, or vendored into another CMake project without BUSY installed
 * *Modular*: explicit module hierarchy with information hiding and visibility control
 * *Parameterizable*: submodules can accept parameters, enabling flexible feature configuration
 * *Lean*: the entire build system compiles in seconds from source
@@ -148,7 +149,7 @@ For example, if you placed the BUSY source code in a `build` subdirectory:
 ....
 cd my_project/build
 cc *.c -O2 -lm -o lua
-lua build.lua ..
+./lua build.lua ..
 ....
 
 BUSY will:
@@ -467,7 +468,7 @@ mkdir build
 cd build
 git clone https://github.com/rochus-keller/BUSY.git .
 cc *.c -O2 -lm -o lua
-lua build.lua ..
+./lua build.lua ..
 ....
 
 NOTE: You can also keep the BUSY source code separate and use `-S` and `-B` to specify paths.
@@ -555,7 +556,7 @@ cd oberon
 mkdir build && cd build
 git clone https://github.com/rochus-keller/BUSY.git .
 cc *.c -O2 -lm -o lua
-lua build.lua ..
+./lua build.lua ..
 ....
 
 The Oberon+ root BUSY file imports LeanQt as a submodule:
@@ -858,7 +859,7 @@ lua build.lua [options] [<path-to-source>]
 |Check only: run the parser/analyzer without building; no files or directories are generated
 
 |`-G <generator>`
-|Generate project files for another build system; `-G qmake` generates QtCreator project files, `-G ninja` generates Ninja build files
+|Generate project files for another build system; `-G qmake` generates QtCreator project files, `-G ninja` generates Ninja build files, `-G cmake` generates a `CMakeLists.txt`
 |===
 
 === Examples
@@ -901,6 +902,16 @@ lua build.lua .. -G ninja
 cd output
 ninja -j8
 ....
+
+Generate a `CMakeLists.txt` and build with CMake:
+
+....
+lua build.lua .. -G cmake
+cmake -S .. -B build
+cmake --build build
+....
+
+(The `CMakeLists.txt` is written to the source tree root; see <<cmake-backend>>.)
 
 [[ninja-backend]]
 == Using the Ninja Backend
@@ -979,7 +990,7 @@ Generate and build:
 ....
 cd my_hello/build
 cc *.c -O2 -lm -o lua
-lua build.lua .. -G ninja
+./lua build.lua .. -G ninja
 cd output
 ninja
 ....
@@ -1049,6 +1060,102 @@ Use the *Ninja backend* (`-G ninja` + `ninja`) when:
 * You are doing frequent incremental rebuilds during development
 * You want to leverage Ninja's parallel scheduling and minimal-rebuild logic
 * You want to use tools that consume `build.ninja` or `compile_commands.json` (via `ninja -t compdb`)
+
+[[cmake-backend]]
+== Using the CMake Backend
+
+BUSY can generate a `CMakeLists.txt` from a BUSY project via `-G cmake`. This lets people build, develop, and consume a BUSY project with CMake and CMake-aware IDEs (CLion, Qt Creator, Visual Studio, VS Code) without having BUSY installed. Where the Ninja backend emits low-level build edges, the CMake backend emits a conventional, target-based CMake project: one CMake target per BUSY product, with `target_include_directories`, `target_compile_definitions`, `target_compile_options` and `target_link_libraries` carrying the resolved settings.
+
+=== Generating the CMakeLists.txt
+
+....
+lua build.lua <path-to-source> -G cmake
+....
+
+Unlike the Ninja and QMake backends (which write into the build directory), the CMake backend writes a single `CMakeLists.txt` into the *source tree root* (`-S`), because that is where CMake users and IDEs expect to find it, and it is what makes `add_subdirectory()` consumption work.
+
+To protect hand-written files, the generator *never overwrites* an existing `CMakeLists.txt`: if one is already present at the source root, generation aborts with an error and writes nothing. To regenerate, remove the previously generated file first:
+
+....
+rm <path-to-source>/CMakeLists.txt
+lua build.lua <path-to-source> -G cmake
+....
+
+All the usual options (`-T`, `-P`, `-M`) work with `-G cmake`. Note that `-B` selects the BUSY build directory used during generation, but the generated project is still written to the source root and, when configured, uses whatever build directory you pass to `cmake -B`.
+
+=== Configuring and Building
+
+The generated project is a normal out-of-source CMake project:
+
+....
+cmake -S <path-to-source> -B build
+cmake --build build
+....
+
+CMake detects the compiler itself (via `project(<name> C CXX)`); BUSY does not pin `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`. The resolved BUSY flags, defines and include paths are emitted as target usage requirements. For cross-compilation, supply a CMake toolchain file as usual (`-DCMAKE_TOOLCHAIN_FILE=...`).
+
+[[qt-tools]]
+=== Qt Tools (moc, rcc, uic)
+
+For products using `Moc`, `Rcc` or `Uic`, the generator emits explicit `add_custom_command` steps (rather than relying on CMake's `AUTOMOC`/`AUTORCC`/`AUTOUIC`), replicating exactly what BUSY does: the moc defines pass-through, the sibling `<name>_p.h` private-header auto-include (`-p`/`-b`), and the `-name` argument for rcc. 
+Generated files are placed in the module's build directory (matching BUSY's `build_dir()`), so sources that `#include "foo.moc"` or `#include "ui_foo.h"` find them on the include path, and each consuming target is ordered after the generation via `add_dependencies`.
+
+When the BUSY project builds its own moc/rcc/uic from source (as LeanQt does), the generated CMake project builds those tool executables as well -- the cmake backend emits them like any other executable product. This is no different from the direct, Ninja, or QMake backends: none of them build "Qt" itself; they build the tool executables that the project defines. 
+When the BUSY spec then places such a built tool at its expected name/location through a `Copy` product (LeanQt's `copy_moc`/`copy_rcc`/`copy_uic`, which copy the built executable to the plain `moc`/`rcc`/`uic` name in the tool directory), the cmake backend translates that `Copy` (see <<copy-targets>>) and wires the tool step to invoke the copied tool. In that common case moc/rcc/uic work out of the box with no manual configuration.
+
+Each tool step selects the tool it invokes as follows: if the project provides the tool via a `Copy` (as LeanQt does), the step defaults to that copied tool and depends on it being built and copied first; otherwise it falls back to the plain tool name resolved from `PATH`. Either choice can be overridden with a cache variable:
+
+....
+BUSY_MOC   (override; empty = project-built tool if available, else moc from PATH)
+BUSY_RCC   (override; empty = project-built tool if available, else rcc from PATH)
+BUSY_UIC   (override; empty = project-built tool if available, else uic from PATH)
+....
+
+You normally do not need to set these for a project like LeanQt. Set one only to force a specific tool binary, e.g.:
+
+....
+cmake -S <path-to-source> -B build -DBUSY_UIC=/abs/path/to/uic
+....
+
+Using the project's own tools (rather than a system Qt on `PATH`) matters: a system `uic`/`moc` from Qt emits code guarded by macros such as `QT_CONFIG(...)` that a LeanQt does not define, which then fails to compile. This is why the generator prefers the project-built, `Copy`-placed tool by default.
+
+=== Use Cases
+
+The generated `CMakeLists.txt` is designed to serve three scenarios from a single file:
+
+* *Build/develop with CMake instead of BUSY.* Run `cmake -S . -B build && cmake --build build`, or just open the project folder in a CMake-aware IDE. This is the common case: a self-contained project you can keep building without BUSY.
+
+* *Vendor the project into another CMake project (`add_subdirectory`).* Each product is exposed both under its plain target name and under a namespaced alias (`<project>::<product>`), and public include directories and defines are attached as `PUBLIC`/`INTERFACE` usage requirements. A parent project can therefore drop the tree in (e.g. as a submodule) and consume it directly:
++
+....
+add_subdirectory(LeanQt)
+target_link_libraries(myapp PRIVATE LeanQt::libqt)
+....
+
+* *Produce a starting point for a hand-maintained CMake project.* Because the output is conventional target-based CMake, it can be committed and edited by hand if a project wants to migrate away from BUSY entirely. (Re-running the generator will refuse to overwrite such an edited file, so it will not clobber your changes.)
+
+Installation/packaging (`install(TARGETS ... EXPORT ...)` and `find_package`-style config files) is *not* generated; consumption is via `add_subdirectory`, not `find_package` (see <<cmake-limitations>>).
+
+=== Moving the Generated File
+
+Source file paths in the generated `CMakeLists.txt` are expressed relative to `${CMAKE_CURRENT_SOURCE_DIR}` (the directory that contains the `CMakeLists.txt`), build outputs relative to `${CMAKE_CURRENT_BINARY_DIR}`, and only paths that fall outside the source tree are emitted as absolute paths. This makes the project relocatable *as a whole* but tied to its original position relative to the sources.
+
+Consequently:
+
+* *Keep the file where it was generated* (the source root). Building in a separate build directory (`cmake -B build`) is fully supported and is the normal workflow -- that does not move the `CMakeLists.txt`.
+* *To consume it from elsewhere, reference it in place* with `add_subdirectory(<path-to-source-root>)` rather than copying the file. `${CMAKE_CURRENT_SOURCE_DIR}` then still resolves to the original source root, so all relative paths remain valid.
+* *Do not copy or move the `CMakeLists.txt` on its own* to a different directory: `${CMAKE_CURRENT_SOURCE_DIR}` would change and the relative source references (e.g. `../LeanQt/...` for a submodule outside the tree) would break. If you genuinely need the project rooted elsewhere, regenerate it with the appropriate `-S` so the paths are recomputed for the new location.
+
+[[cmake-limitations]]
+=== Limitations of the Current Implementation
+
+The CMake backend is build-oriented and deliberately minimal. Current limitations:
+
+* *Single-platform snapshot.* Like the QMake and Ninja backends, the generator runs after BUSY's analysis phase, so all `if target_os == ...` / `if target_toolchain == ...` conditionals are already resolved. The generated `CMakeLists.txt` therefore reflects *the platform and toolchain it was generated on* and is not itself cross-platform. Generate it on (or for) each target platform you need.
+* *No install/package export.* No `install()` rules and no `find_package`-compatible `XConfig.cmake`/`XTargets.cmake` are generated. Consumption is via `add_subdirectory`, not `find_package`.
+* *`Copy` targets copy built artifacts only.* The `Copy` class is translated using `${CMAKE_COMMAND} -E copy_if_different` (no Python or external tool required), driven by the product's `use_deps` filter and `outputs` patterns. For a dependency that produces a build artifact (executable, library, object set) the copy source is `$<TARGET_FILE:...>`, which also establishes the build-ordering dependency; this covers the tool-copy case (LeanQt's `copy_moc`/`copy_rcc`/`copy_uic`) that the moc/rcc/uic steps rely on (see <<qt-tools,Qt Tools>>). Copying arbitrary non-target source files listed directly in a `Copy` product's `sources` is not translated.
+* *Single generated file.* The whole project is emitted as one `CMakeLists.txt` at the source root rather than a hierarchy of `add_subdirectory` files.
+* *No in-place overwrite.* Regeneration requires removing the previously generated `CMakeLists.txt` first, by design, so a hand-written or hand-edited file is never clobbered.
 
 == Predeclared Variables Quick Reference
 

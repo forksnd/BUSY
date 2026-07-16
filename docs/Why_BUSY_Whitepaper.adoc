@@ -9,7 +9,7 @@ image:logo_small.png[BUSY Logo]
 = A Statically Typed, Zero-Dependency Build System for C/C++
 
 Rochus Keller <me@rochus-keller.ch>
-2026-06-30
+2026-07-16
 
 :toc:
 :numbered:
@@ -346,6 +346,14 @@ BUSY's direct build capability is its primary mode of operation, but it also sup
 
 The QMake generator produces `.pro` and `.pri` files compatible with QtCreator. This allows developers to use QtCreator's code navigation, debugging, and project management features while keeping BUSY as the authoritative build specification.
 
+=== CMake Generator (`-G cmake`)
+
+The CMake generator produces `CMakeLists.txt` files compatible with CMake. This allows developers to build, develop, and consume a BUSY project with CMake and CMake-aware IDEs (CLion, Qt Creator, Visual Studio, VS Code) without having BUSY installed. The generated `CMakeLists.txt` is designed to serve three scenarios from a single file: 
+
+* build/develop with CMake instead of BUSY,
+* vendor the project into another CMake project,
+* produce a starting point for a hand-maintained CMake project.
+
 === Ninja Generator (`-G ninja`)
 
 The Ninja generator produces a `build.ninja` file that can be built with the Ninja build tool. This is useful for iterative development where Ninja's fast incremental rebuilds are valuable:
@@ -362,7 +370,7 @@ The Ninja generator handles all three toolchains (GCC, Clang, MSVC) and all supp
 
 == Conclusion
 
-BUSY is not the right tool for every project. If you need deep IDE integration with Visual Studio or Xcode project files, CMake's generator ecosystem is unmatched. If you need hermetic builds with remote caching for a massive monorepo, Bazel is the right choice. If you need to integrate with a large ecosystem of CMake-based dependencies via `find_package()`, CMake is the pragmatic option.
+BUSY is not the right tool for every project. If you need deep IDE integration with Visual Studio or Xcode project files, CMake's generator ecosystem is unmatched (though you still can generate CMake specifications with BUSY). If you need hermetic builds with remote caching for a massive monorepo, Bazel is the right choice. If you need to integrate with a large ecosystem of CMake-based dependencies via `find_package()`, CMake is the pragmatic option.
 
 But for C/C++ projects that value:
 
